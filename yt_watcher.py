@@ -1,16 +1,16 @@
 from __future__ import unicode_literals
-import youtube_dl
+import yt_dlp as youtube_dl
 import yt_local_db_manager as db
 import json
 import logging
 import os
 from pathlib import Path
 from utils import file_exists, MyLogger
+from config import VIDEO_FOLDER
 
 def my_hook(d):
     if d['status'] == 'finished':
         print('Done downloading, now converting ...')
-
 
 ydl_opts = {
     'cookiefile': 'cookies.txt',
@@ -19,16 +19,14 @@ ydl_opts = {
     'logger': MyLogger(),
     'progress_hooks': [my_hook],
     'ignoreerrors': True,
-    'output': "videos"
+    'output': "videos",
+    "outtmpl": "%(title)s-%(id)s.%(ext)s"
 }
 ydl = youtube_dl.YoutubeDL(ydl_opts)
 
 ydl_downloader_opts = ydl_opts
 ydl_downloader_opts["skip_download"] = False
 ydl_downloader = youtube_dl.YoutubeDL(ydl_downloader_opts)
-
-URL = 'https://www.youtube.com/playlist?list=PL_HmVyhcPK5hFv7L_PS3K7fe4AVBJFh_G'
-VIDEO_FOLDER = "data/video"
 
 def add_playlist_to_db(url):
     # r = ydl.download([URL])
@@ -54,13 +52,13 @@ def add_playlist_to_db(url):
         file_size = video.get("filesize", "")
 
         db.insert_video(video_name, video_code, video_url, uploader, uploadtime, file_path, file_size, playlist_name, playlist_code)
+    
+    logging.info("Play list added! {}".format(playlist_name))
 
 def extract_video_file_info(video_url):
     r = ydl.extract_info(video_url)
-    ext = r.get("ext", "")
-    title = r.get("title", "")
-    id = r.get("id", "")
-    return title, id, ext
+    filename = ydl.prepare_filename(r)
+    return filename
 
 def copy_video_folder(file_name):
     if not file_exists(file_name):
@@ -74,23 +72,24 @@ def update_video_in_db(title, id, file_path, file_size, file_status):
 
 def download_video(video_url):
     
-    title, id, ext = extract_video_file_info(video_url)
-    file_name = "{}-{}.{}".format(title, id, ext)
+    file_name = extract_video_file_info(video_url)
 
     r = ydl_downloader.download([video_url])
 
     if not file_exists(file_name):
-        logging.error("download fail")
+        logging.error("Download fail")
         return
 
     logging.info("download success")
     copy_video_folder(file_name)
+    
+    file_path = "{}/{}".format(VIDEO_FOLDER, file_name)
+    file_status = "DOWNLOAED"
+    
+    db.update_video(video_url=video_url, file_path=file_path, file_status=file_status)
         
     
-
-
-
-def sync_playlist(playlist_name=None, playlist_url=None):
+def sync_playlist(playlist_name=None, playlist_url=None, skip_download=True):
     if playlist_name is None and playlist_url is None:
         logging.error("playlist name and url not provided")
         return False
@@ -102,6 +101,9 @@ def sync_playlist(playlist_name=None, playlist_url=None):
     
     for video in videos:
         video_url = video["video_url"]
+        file_status = video["file_status"]
+        if file_status is not None and skip_download:
+            continue
         download_info = download_video(video_url)
         # update_video_info()
 
@@ -109,7 +111,6 @@ def sync_all_playlists():
     playlists = db.select_all_playlists()
     for playlist in playlists:
         sync_playlist(playlist["playlist_name"], playlist["playlist_url"])
+    logging.info("Sync finished")
 
 
-if __name__ == "__main__":
-    sync_all_playlists()
